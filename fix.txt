@@ -1,0 +1,53 @@
+Ian @ un4seen
+Administrator
+Posts: 13959
+Re: ASIO spectrum example
+« Reply #2 on: 13 Jul '12 - 17:32 »
+
+
+The fast playback is due to the spectrum display's BASS_ChannelGetData calls taking data 
+away from the ASIOPROC's BASS_ChannelGetData calls, ie. it's resulting in the ASIO output 
+missing some data. To avoid that, you could have the ASIOPROC buffer the data, and have 
+the spectrum display get the data from there via a custom stream. It could look something 
+like this...
+
+
+BYTE *asiobuf; // buffer for the sample data
+DWORD asiobuflen; // buffer length
+
+...
+
+BASS_CHANNELINFO info;
+BASS_ChannelGetInfo(stream, &info); // get info on the source stream
+bufstream=BASS_StreamCreate(info.freq, info.chans, BASS_SAMPLE_FLOAT|BASS_STREAM_DECODE, BufStreamProc, 0); // create a custom stream with the same format
+asiobuflen=FFTSIZE*info.chans*sizeof(float); // FFTSIZE = xxx part of the BASS_DATA_FFTxxx flag used
+asiobuf=(BYTE*)malloc(asiobuflen); // allocate the buffer
+memset(asiobuf, 0, asiobuflen);
+
+...
+
+DWORD CALLBACK AsioProc(BOOL input, DWORD channel, void *buffer, DWORD length, void *user)
+{
+	DWORD c=BASS_ChannelGetData(stream, buffer, length); // get data from the source
+	if (c==-1) c=0; // an error, no data
+	if (c<asiobuflen) {
+		memmove(asiobuf, asiobuf+c, asiobuflen-c); // shift the old data in the buffer to make space for the new
+		memcpy(asiobuf+asiobuflen-c, buffer, c); // add the new data
+	} else
+		memcpy(asiobuf, buffer, asiobuflen); // copy the data to the buffer
+	return c;
+}
+
+DWORD CALLBACK BufStreamProc(HSTREAM handle, void *buffer, DWORD length, void *user)
+{
+	if (length>asiobuflen) length=asiobuflen; // just in case
+	memcpy(buffer, asiobuf, length); // copy the data from the buffer
+	return length;
+}
+
+
+You would then use the "bufstream" handle in the spectrum display's BASS_ChannelGetData calls. 
+Note the display's refresh rate will be limited by the ASIO buffer length (in the BASS_ASIO_Start call), 
+as that determines how often the ASIOPROC is called and the data updated.
+
+
